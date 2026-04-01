@@ -1,0 +1,194 @@
+---
+title: "Untitled"
+author: "Wilson Cam"
+date: "2025-03-11"
+output: pdf_document
+---
+
+```{r}
+library(zoo)
+library(tseries)
+library(forecast)
+library(ggplot2)
+library(dplyr)
+```
+
+
+```{r}
+df <- read.csv("/Users/judynei/Downloads/multiTimeline.csv", 
+               stringsAsFactors = FALSE, 
+               skip = 2)  # Skip first 2 rows
+colnames(df) <- c("Month", "Temp")
+```
+
+```{r}
+# Find outliers using boxplot.stats
+outlier_values <- boxplot.stats(df$Temp)$out
+
+# Count of outliers
+length(outlier_values)
+
+# Identify the lower and upper bounds for outlier detection
+Q1 <- quantile(df$Temp, 0.25)
+Q3 <- quantile(df$Temp, 0.75)
+IQR <- Q3 - Q1
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+# Removing outliers using explicit condition
+df_clean <- df[df$Temp >= lower_bound & df$Temp <= upper_bound, ]
+
+# Boxplots before and after removing outliers
+par(mfrow = c(1, 2))  # Display two plots side by side
+
+boxplot(df$Temp, main = "Boxplot of Search Interest (Before Removing Outliers)", 
+        ylab = "Temperature", col = "lightblue")
+
+boxplot(df_clean$Temp, main = "Boxplot of Search Interest (After Removing Outliers)", 
+        ylab = "Temperature", col = "lightgreen")
+```
+
+
+```{r}
+ggplot(df, aes(x = Temp)) +
+  geom_histogram(binwidth = 5, fill = "skyblue", color = "black") +
+  labs(title = "Histogram of Search Interest",
+       x = "Search Interest",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+```{r}
+# Convert to time series object (monthly data, starts in January 2004)
+df_ts <- ts(na.omit(df_clean$Temp), start = c(2004, 1), frequency = 12)
+
+summary(df_ts)
+
+rolling_window <- 12  
+
+# Compute rolling standard deviation
+rolling_sd <- rollapply(df_ts, width = rolling_window, FUN = sd, fill = NA, align = "right")
+
+# Create a data frame for ggplot
+rolling_sd_df <- data.frame(
+  Time = time(df_ts),
+  Rolling_SD = rolling_sd
+)
+
+# Plot Rolling Standard Deviation
+ggplot(rolling_sd_df, aes(x = Time, y = Rolling_SD)) +
+  geom_line(color = "blue", size = 1) +
+  ggtitle("Rolling Standard Deviation of Temperature Search Interest") +
+  xlab("Time") + 
+  ylab("Rolling Standard Deviation") +
+  theme_minimal()
+
+# Perform Augmented Dickey-Fuller Test for stationarity
+adf_result <- adf.test(df_ts)
+
+# Print ADF test results
+print(adf_result)
+
+# Plot the raw time series
+plot(df_ts, type = "l", col = "blue",
+     main = "Raw Monthly Temperature Search Interest Time Series",
+     xlab = "Time", ylab = "Search Interest")
+```
+```{r}
+rolling_window <- 12  
+
+# Compute the rolling mean
+rolling_mean <- rollmean(df_ts, k = rolling_window, fill = NA, align = "right")
+
+# Create a time series plot with rolling mean
+autoplot(df_ts, series = "Original", color = "blue") +
+  autolayer(rolling_mean, series = "Rolling Mean", color = "red") +
+  ggtitle("Rolling Mean of Temperature Search Interest") +
+  xlab("Time") + 
+  ylab("Search Interest") +
+  theme_minimal()
+```
+
+```{r}
+df_ts <- log(df_ts)
+plot(df_ts, type = "l", col = "blue", main = "Log Transformed Time Series")
+
+```
+```{r}
+par(mfrow = c(1,2))  # Arrange plots side by side
+acf(df_ts, main = "ACF of Search Interest")
+pacf(df_ts, main = "PACF of Search Interest")
+```
+
+
+
+```{r}
+df_ts <- diff(df_ts, lag = 12)  # monthly differencing
+plot(df_ts, main = "Seasonally Differenced AEP Load Data")
+```
+
+
+```{r}
+# Decompose the time series (multiplicative or additive)
+decomp <- decompose(df_ts, type = "additive")  # Use "additive" if appropriate
+
+plot(decomp$trend, main = "Trend Component", col = "blue", ylab = "Temperature")
+plot(decomp$seasonal, main = "Seasonal Component", col = "green", ylab = "Seasonality")
+plot(decomp$random, main = "Residual Component", col = "red", ylab = "Residuals")
+```
+
+```{r}
+acf(na.omit(decomp$random), main = "ACF of Residuals")
+pacf(na.omit(decomp$random), main = "PACF of Residuals")
+
+arma_model <- arima(na.omit(decomp$random), order = c(3, 0, 1))
+summary(arma_model)
+
+Box.test(residuals(arma_model), lag = 12, type = "Ljung-Box")
+
+```
+
+```{r}
+# Decompose time series (assuming ts_data is your original time series)
+decomp <- decompose(df_ts)
+
+# Extract components
+trend <- decomp$trend
+seasonality <- decomp$seasonal
+residuals <- na.omit(decomp$random)  # Remove NAs from residuals
+
+# Forecast trend using linear model
+trend_ts <- ts(na.omit(trend), frequency = 12)  # Adjust frequency if needed
+trend_model <- tslm(trend_ts ~ trend)  # Linear trend model
+trend_forecast <- forecast(trend_model, h = 12)  # Forecast 12 months ahead
+
+# Extend seasonality by repeating past cycles
+seasonal_pattern <- tail(seasonality, 12)  # Last year’s seasonality
+seasonal_forecast <- rep(seasonal_pattern, length.out = 12)  # Repeat
+
+# Plot trend forecast
+autoplot(trend_forecast) + ggtitle("Trend Forecast")
+
+# Combine trend and seasonal forecasts
+final_forecast <- trend_forecast$mean + seasonal_forecast
+
+# Convert to time series for visualization
+final_forecast_ts <- ts(final_forecast, start = end(df_ts)[1] + c(0,1), frequency = 12)
+
+# Plot the final forecast
+autoplot(final_forecast_ts) +
+  ggtitle("Final Forecast: Trend + Seasonality") +
+  xlab("Time") + ylab("Predicted Values")
+```
+```{r}
+sarima_model <- Arima(df_ts, order = c(3,0,1), seasonal = c(1,1,1))  # Adjust (P,D,Q)
+summary(sarima_model)
+acf(residuals(sarima_model), main = "ACF of Residuals")
+pacf(residuals(sarima_model), main = "PACF of Residuals")
+
+Box.test(residuals(sarima_model), lag = 12, type = "Ljung-Box")
+```
+```{r}
+
+```
+
