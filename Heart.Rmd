@@ -1,0 +1,188 @@
+---
+title: "Analysis of Heart Disease"
+author: "Wilson Cam"
+date: "2024-06-11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(e1071)
+library(nnet)
+library(pROC)
+library(ggplot2)
+library(gridExtra)
+```
+
+1. Load Data
+```{r}
+heart = read.csv("/Users/judynei/Downloads/heart.csv")
+
+str(heart)
+summary(heart)
+colSums(is.na(heart))
+
+heart = na.omit(heart)
+```
+
+2. Exploratory Data Analysis
+```{r}
+cor_matrix = cor(heart)
+print(cor_matrix)
+
+cor_target = cor_matrix[,'target']
+cor_target = sort(cor_target, decreasing = TRUE)
+
+barplot(cor_target, main = "Correlation of Features with Target", col = 'blue', las = 2)
+```
+
+```{r}
+oldpeak = ggplot(heart, aes(x = oldpeak)) + 
+  geom_histogram(bins = 20, fill = 'blue', color = 'black', alpha = 0.7) +
+  ggtitle('Oldpeak Distribution')
+
+cp = ggplot(heart, aes(x = factor(cp))) + 
+  geom_bar(fill = 'blue', color = 'black', alpha = 0.7) +
+  ggtitle('Chest Pain Type Distribution') +
+  xlab('Chest Pain Type')
+
+grid.arrange(oldpeak, cp, nrow = 2)
+```
+
+```{r}
+ggplot(heart, aes(x = age, y = thalach, color = factor(target))) +
+  geom_point(alpha = 0.7) +
+  scale_color_manual(values = c("blue", "red"), name = "Presence of Heart Disease") +
+  labs(title = "Age vs. Maximum Heart Rate Achieved",
+       x = "Age",
+       y = "Maximum Heart Rate Achieved") +
+  theme_minimal()
+```
+
+```{r}
+boxplot(heart, main="Boxplot of Heart Dataset", xlab="Variables", ylab="Values")
+```
+
+3. Logistic Regression Model
+```{r}
+set.seed(1)
+
+heart$target = as.factor(heart$target)
+
+index = createDataPartition(heart$target, p = 0.8, list = FALSE)
+train_heart = heart[index, ]
+test_heart = heart[-index, ]
+
+preProc = preProcess(train_heart[, -ncol(train_heart)], method = c("center", "scale"))
+
+train_heart_scaled = predict(preProc, train_heart[, -ncol(train_heart)])
+test_heart_scaled = predict(preProc, test_heart[, -ncol(test_heart)])
+
+train_heart = cbind(train_heart_scaled, target = train_heart$target)
+test_heart = cbind(test_heart_scaled, target = test_heart$target)
+
+log_reg = train(target ~ ., data = train_heart, method = 'glm', family = 'binomial')
+
+summary(log_reg)
+
+log_reg_preds = predict(log_reg, test_heart)
+log_reg_prob = predict(log_reg, test_heart, type = "prob")[,2]
+
+confusionMatrix(log_reg_preds, test_heart$target)
+
+roc_curve = roc(test_heart$target, log_reg_prob)
+plot(roc_curve, col = "blue", main = "ROC curve")
+auc(roc_curve)
+```
+
+5. KNN with Selected Predictors
+```{r}
+perform_knn <- function(predictors, data) {
+  
+  predictors_data <- data[, c(predictors, "target")]
+
+  set.seed(123)
+  train_indices <- sample(1:nrow(predictors_data), 0.8 * nrow(predictors_data))
+  train_data <- predictors_data[train_indices, ]
+  test_data <- predictors_data[-train_indices, ]
+
+  knn_model <- train(target ~ ., data = train_data, method = "knn")
+
+  predictions <- predict(knn_model, newdata = test_data)
+
+  print(confusionMatrix(predictions, test_data$target))
+
+  accuracy <- mean(predictions == test_data$target)
+  print(accuracy)
+
+  probs <- predict(knn_model, newdata = test_data, type = "prob")[,2]
+  roc_obj <- roc(test_data$target, probs)
+
+  print(auc(roc_obj))
+
+  plot(roc_obj, main = paste("ROC:", paste(predictors, collapse = ", ")))
+}
+
+perform_knn(c("cp", "thalach", "exang", "oldpeak", "ca", "sex"), heart)
+perform_knn(c("age", "trestbps", "chol", "fbs", "restecg"), heart)
+```
+
+6. K-Means Clustering
+```{r}
+numeric_cols <- sapply(heart, is.numeric)
+numeric_data <- heart[, numeric_cols]
+
+numeric_data_scaled <- as.data.frame(scale(numeric_data))
+
+wss <- (nrow(numeric_data_scaled) - 1) * sum(apply(numeric_data_scaled, 2, var))
+for (i in 2:15) {
+  wss[i] <- sum(kmeans(numeric_data_scaled, centers = i)$withinss)
+}
+
+plot(1:15, wss, type = "b",
+     xlab = "Number of Clusters",
+     ylab = "Within groups sum of squares")
+```
+
+```{r}
+set.seed(42)
+
+kmeans_result <- kmeans(numeric_data_scaled, centers = 3, nstart = 25)
+
+heart$cluster <- as.factor(kmeans_result$cluster)
+
+pca <- prcomp(numeric_data_scaled, center = TRUE, scale. = TRUE)
+pca_data <- as.data.frame(pca$x[, 1:2])
+pca_data$cluster <- heart$cluster
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "K-means Clustering (PCA Projection)")
+```
+
+```{r}
+summary(heart$cluster)
+aggregate(numeric_data, by = list(heart$cluster), FUN = mean)
+
+table(heart$cluster, heart$sex)
+```
+
+```{r}
+ggplot(heart, aes(x = cluster, fill = as.factor(sex))) +
+  geom_bar(position = "fill") +
+  theme_minimal()
+
+ggplot(heart, aes(x = cluster, fill = as.factor(cp))) +
+  geom_bar(position = "fill") +
+  theme_minimal()
+
+ggplot(heart, aes(x = cluster, y = age, fill = cluster)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+
